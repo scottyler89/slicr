@@ -94,7 +94,7 @@ def G_from_adj_and_dist(knn_adj_list, corrected_dist):
         corrected_dist[i] = inv_min_max_norm(corrected_dist[i])
         ## 1: to skep self edges
         for j, dist in zip(knn_adj_list[i,1:], corrected_dist[i,1:]):
-                G.add_edge(i, j, weight=dist)
+            G.add_edge(i, j, weight=dist)
     return(G)
 
 
