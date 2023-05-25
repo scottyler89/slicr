@@ -1,7 +1,9 @@
 ## graph.py
-import numpy as np
 import torch
+import numpy as np
 import networkx as nx
+from copy import deepcopy
+from scipy.sparse import csr_matrix
 from .correction import correct_observed_distances, compute_distance_correction_simplified, compute_covariate_difference
 
 def expand_knn_list(knn_adj_list):
@@ -73,7 +75,10 @@ def prune_only_mask(adj, dists, mask, new_k):
     Prune a k-nearest neighbors adjacency list and the associated distances so that only the top k neighbors with the smallest distances are kept. 
     Also uses a mask to ignore certain values.
     """
-    out_adj = np.zeros((adj.shape[0], new_k))
+    assert adj.shape[1]>= new_k, "need to have a greater number of k connections in the original graph compared to the new_k we're trying to prune to"
+    return(adj[:,:new_k], dists[:,:new_k], mask[:,:new_k])
+
+"""     out_adj = np.zeros((adj.shape[0], new_k))
     out_dists = np.zeros((adj.shape[0], new_k))
     # create a new mask with the same size
     out_mask = np.zeros((mask.shape[0], new_k), dtype=bool)
@@ -87,7 +92,7 @@ def prune_only_mask(adj, dists, mask, new_k):
         out_dists[node, :] = masked_dists[top_k_idxs]
         out_mask[node, :] = mask[node, top_k_idxs]
     return (out_adj, out_dists, out_mask)
-
+ """
 
 def inv_min_max_norm(in_vect, epsilon=1e-8):
     """
@@ -108,10 +113,23 @@ def G_from_adj_and_dist(knn_adj_list, corrected_dist):
     # Create a weighted graph from the adjacency list and distances
     G = nx.Graph()
     for i in range(n):
+        G.add_node(i)
+    for i in range(n):
         corrected_dist[i] = inv_min_max_norm(corrected_dist[i])
         ## 1: to skep self edges
-        for j, dist in zip(knn_adj_list[i,1:], corrected_dist[i,1:]):
-            G.add_edge(i, j, weight=dist)
+        for temp_j, temp_dist in zip(knn_adj_list[i,1:], corrected_dist[i,1:]):
+            if temp_j in G[i]:
+                    G.add_edge(deepcopy(i),
+                               deepcopy(temp_j),
+                               weight=min(deepcopy(temp_dist), 
+                                          G[i][temp_j]['weight'])
+                    )
+            else:
+                G.add_edge(deepcopy(i),
+                            deepcopy(temp_j),
+                            weight=deepcopy(temp_dist)
+                            )
+            G.add_edge(i, temp_j, weight=temp_dist)
     return(G)
 
 
@@ -144,35 +162,33 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10):
     >>> cutoff_threshold = 3.0
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
-    # Calculate the differences between adjacent distances
-    dist_diffs = np.diff(dists[:, min_k:], axis=1)
-    # Calculate the cutoff for each row
-    diff_cutoff = np.mean(dist_diffs, axis=1) * cutoff_threshold
-    print("mean cutoff")
-    print(np.mean(diff_cutoff))
-    # # Create a mask where the differences exceed the cutoff
-    exceed_cutoff_mask = dist_diffs > diff_cutoff[:, np.newaxis]
-    print("mean # exceeding cutoff")
-    print(np.mean(np.sum(exceed_cutoff_mask,axis=1)))
-    print(exceed_cutoff_mask)
-    # see which rows need to be masked at all (total # of exceeding edge diffs)
-    # see which rows need to be masked at all (any exceeding edge diffs)
-    rows_to_mask = np.where(np.any(exceed_cutoff_mask, axis=1))[0]
-    #rows_to_mask = np.where(np.sum(exceed_cutoff_mask,axis=1) > 0)[0]
-    print("rows_to_mask")
-    print(rows_to_mask)
-    print("# need pruning:")
-    print(rows_to_mask.shape[0])
-    ## Calculate each node's first instance of exceeding the cutoff
-    inclusion_mask = np.ones_like(dists, dtype=bool)
-    #first_exceed_indices = np.zeros(exceed_cutoff_mask.shape[0],dtype=int)
-    for node in rows_to_mask:
-        temp_arg_max = np.argmax(exceed_cutoff_mask[node,:])
-        #print(temp_arg_max)
-        inclusion_mask[node, (min_k+temp_arg_max+1):] = False
-    print(inclusion_mask)
-    print(np.mean(np.sum(inclusion_mask,axis=1)))
-    return inclusion_mask
+    dists = dists.numpy()
+    mean_dist = np.mean(dists[:,1:min_k])
+    sd_dist = np.std(dists[:, 1:min_k])
+    z_dist = dists[:, min_k:] - mean_dist
+    z_dist /= sd_dist
+    #sns.distplot(z_dist.flatten())
+    #plt.show()
+    mask = np.ones_like(dists, dtype=bool)
+    mask[:,min_k:] = z_dist < cutoff_threshold
+    ## now we'll also mask at big jumps
+    diff_mask = np.ones_like(dists, dtype=bool)
+    discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
+    discrete_diff -= np.mean(discrete_diff)
+    discrete_diff /= np.std(discrete_diff)
+    # mask everything whose discrete difference is > threshold & farther
+    temp_diff_mask_cutoff = discrete_diff > cutoff_threshold
+    # finds the idxs with jumps
+    idxs_with_diff_mask = np.where(np.min(temp_diff_mask_cutoff, axis=1)==0)[0]
+    for idx in idxs_with_diff_mask:
+        # then mask everything that is farther than the jump
+        temp_gap_idx = np.argmin(temp_diff_mask_cutoff[idx,:])
+        temp_diff_mask_cutoff[idx, temp_gap_idx:]=False
+    diff_mask[:, min_k:] = temp_diff_mask_cutoff
+    # merge the masks
+    mask = mask * diff_mask
+    print(mask)
+    return(mask)
 
 
 def G_from_adj_and_dist_mask(knn_adj_list, corrected_dist, mask):
@@ -183,11 +199,25 @@ def G_from_adj_and_dist_mask(knn_adj_list, corrected_dist, mask):
     # Create a weighted graph from the adjacency list and distances
     G = nx.Graph()
     for i in range(n):
-        corrected_dist[i] = inv_min_max_norm(corrected_dist[i])
+        G.add_node(i)
+    for i in range(n):
+        inv_min_max_dist = inv_min_max_norm(deepcopy(corrected_dist[i,:]))
         # 1: to skip self edges
-        for j, dist, m in zip(knn_adj_list[i, 1:], corrected_dist[i, 1:], mask[i, 1:]):
-            if m:  # Only add edge if mask value is True
-                G.add_edge(i, j, weight=dist)
+        for temp_j, temp_dist, temp_m in zip(knn_adj_list[i, 1:], inv_min_max_dist[1:], mask[i, 1:]):
+            if temp_m:  # Only add edge if mask value is True
+                # if the edge is already there, update to the minimum
+                if temp_j in G[i]:
+                    G.add_edge(deepcopy(i),
+                               deepcopy(temp_j),
+                               weight=min(deepcopy(temp_dist), 
+                                          G[i][temp_j]['weight'])
+                    )
+                else:
+                    G.add_edge(deepcopy(i),
+                               deepcopy(temp_j),
+                               weight=deepcopy(temp_dist)
+                               )
+                #G.add_edge(deepcopy(i), deepcopy(temp_j), weight=deepcopy(temp_dist))
     return G
 
 
@@ -212,3 +242,89 @@ def pruned_to_csr_mask(pruned_adj, pruned_dists, mask, inv_min_max=True):
     adj_mat_csr.data[adj_mat_csr.data < 0] = 0
     adj_mat_csr.data[np.isnan(adj_mat_csr.data)] = 0
     return adj_mat_csr
+
+
+def get_re_expanded_adj_and_dist(pruned_adj, pruned_dists, mask, k, epsilon = 1e-8):
+    # Number of nodes
+    n_nodes = pruned_adj.shape[0]
+    # Initialize the new adjacency list, distance list and mask
+    new_adj = torch.zeros((n_nodes, k), dtype=torch.long)
+    new_adj[:, 0] = torch.arange(n_nodes, dtype=torch.long)
+    new_dists = torch.zeros((n_nodes, k))
+    new_mask = torch.zeros((n_nodes, k), dtype=torch.bool)
+    new_mask[:, 0] = True
+    # Process each node
+    for node in range(n_nodes):
+        # Get the first neighbors and their distances
+        first_neighbors = pruned_adj[node,:]
+        #print("first_neighbors", first_neighbors)
+        first_neighbor_dists = pruned_dists[node,:]
+        #print("first_neighbor_dists", first_neighbor_dists)
+        # Get the second neighbors and their distances
+        second_neighbors = pruned_adj[first_neighbors,:]
+        second_neighbor_dists = pruned_dists[first_neighbors,:]
+        # we'll assume that the nearest non-self is 'as close as you can get'
+        first_neighbor_dists_offset=first_neighbor_dists.clone()
+        first_neighbor_dists_offset[1:] = first_neighbor_dists[1:] - \
+            first_neighbor_dists[1]+epsilon
+        ## I don't know why the slicing isn't working,and it's applying this subtraction to [0] also...
+        ## So we'll just manually reset the self distance to 0... Dumb... Or maybe I'm the dumb one...?
+        first_neighbor_dists_offset[0]=0
+        #print(first_neighbor_dists)
+        #print(first_neighbor_dists_offset)
+        # Expand first_neighbor_dists to match the shape of second_neighbor_dists
+        first_neighbor_dists_expanded = first_neighbor_dists_offset.unsqueeze(1).expand_as(second_neighbor_dists)
+        # Now, add them together
+        combined_dists = first_neighbor_dists_expanded + second_neighbor_dists
+        if not torch.all(combined_dists>=0):
+            print("first_neighbor_dists_offset")
+            print(first_neighbor_dists_offset)
+            print("second_neighbor_dists")
+            print(second_neighbor_dists)
+            print("combined_dists")
+            print(combined_dists)
+            assert False, "Combined_dists is negative. This is a bug."
+        # now reset the first neighbors to their actual distances 
+        combined_dists[:,0]=pruned_dists[node,:]
+        #print(pruned_dists[first_neighbors, :]-combined_dists)
+        # Compute the total distances to the second neighbors by adding the first neighbors' distances
+        combined_dists = first_neighbor_dists.view(
+            -1, 1) + second_neighbor_dists
+        # Create a mask to ignore the self-connections, but keep first neighbors
+        temp_mask = (second_neighbors != node)
+        #print("temp_mask\n", temp_mask)
+        #print("temp_mask.shape:",temp_mask.shape)
+        # Apply the mask to the combined_neighbors and combined_dists
+        masked_neighbors = second_neighbors[temp_mask]
+        masked_dists = combined_dists[temp_mask]
+        # Get the unique nodes in the masked_neighbors and their indices
+        unique_nodes, indices = torch.unique(
+            masked_neighbors, return_inverse=True)
+        # Compute the minimum distance to each unique node
+        min_dists = torch.zeros(unique_nodes.shape[0])
+        for i, unique_node in enumerate(unique_nodes):
+            min_dists[i] = masked_dists[indices == i].min()
+        # Get the indices that would sort the min_dists
+        sorted_indices = torch.argsort(min_dists)
+        # Get the indices of top k shortest distances
+        # -1 to give the self-connection it's slot
+        temp_k = min(k, sorted_indices.shape[0])-1
+        top_k_indices = sorted_indices[:temp_k]
+        # Select top k neighbors and their distances and store them
+        #print("setting the top k neighbors:")
+        new_adj[node, 1:temp_k+1] = unique_nodes[top_k_indices]
+        #print(new_adj[node,:])
+        new_dists[node, 1:temp_k+1] = min_dists[top_k_indices]
+        #print(new_dists[node, :])
+        # Update the mask
+        new_mask[node, :temp_k+1] = True
+        #print(new_mask[node,:])
+    return new_adj, new_dists, new_mask
+
+
+
+
+
+
+
+
