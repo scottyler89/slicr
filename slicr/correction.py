@@ -170,6 +170,9 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     """
     Correct the observed distances by subtracting the computed correction. The row-wise means and sds of the corrected distances are then adjusted to match those of the original observed distances. The correction is only applied to values indicated by the mask.
     """
+    assert torch.all(obs_knn_dist >=
+                     0), "There's a bug. The original distances have negatives"
+    ## here we temporarily ignore the mask so that 
     mask[:, 0] = False
     # Create an array of the same shape as obs_knn_dist for the corrected distances
     corrected_obs_knn_dist = obs_knn_dist.clone()
@@ -200,6 +203,51 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     # Adjust the corrected distances to preserve the original row-wise means and sds for the masked elements
     corrected_obs_knn_dist[mask] = (corrected_obs_knn_dist[mask] - corrected_obs_knn_dist_means_adj[mask]) * (
         obs_knn_dist_sds_adj[mask]/corrected_obs_knn_dist_sds_adj[mask]) + obs_knn_dist_means_adj[mask]
+    # It's possible in weird circumstances, that the regression rotates something below zero (meaning)
+    # that this would be even more similar to the point than itself. That's ridiculous. So no.
+    row_mins = corrected_obs_knn_dist.min(1)
+    print("row_mins")
+    print(row_mins)
+    # go through the rows where the min is less than zero, then subtract the min value to that row
+    # so that they're all positive + eta offset of 1e-8
+    # for index where row_mins < 0 ...
+    # Identify indices of rows where minimum is less than zero
+    epsilon = 1e-8
+    indices = torch.where(row_mins.values < epsilon)[0]
+    # Define a small constant, eta
+    # For each index where row_min is less than zero, subtract min value and add eta
+    for i in indices:
+        corrected_obs_knn_dist[i] -= row_mins.values[i]
+        corrected_obs_knn_dist[i] += epsilon
+        corrected_obs_knn_dist[i][0] = 0.
+    row_mins = corrected_obs_knn_dist.min(1)
+    print("row_mins after correction:")
+    print(row_mins)
+    print("obs_knn_dist")
+    print(obs_knn_dist)
+    print("dist_correction")
+    print(dist_correction)
+    print("corrected_obs_knn_dist")
+    print(corrected_obs_knn_dist)
+    print("all >= 0:",torch.all(corrected_obs_knn_dist >= 0))
+    # set the self connection back to true
+    mask[:, 0] = True
+    #assert torch.all(corrected_obs_knn_dist>=0), "There's a bug. The corrected distances have negatives"
     return corrected_obs_knn_dist
 
+
+def resort_order(adj, dist, mask):
+    for i in range(dist.shape[0]):
+        #print("\n")
+        #print(dist[i])
+        #print(adj[i])
+        new_order = np.argsort(dist[i,:])
+        adj[i]=adj[i,new_order]
+        dist[i]=dist[i,new_order]
+        mask[i] = mask[i, new_order]
+        #print(dist[i])
+        #print(adj[i])
+        assert dist[i, 2]-dist[i, 1] > 0, "WTF?"
+    assert torch.all(dist[:, 2]-dist[:, 1]>0), "Sorted in the wrong order. This is a bug."
+    return(adj, dist, mask)
 
