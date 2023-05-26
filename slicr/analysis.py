@@ -4,7 +4,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 from .utils import convert_to_torch_sparse
-from .correction import compute_covariate_difference, compute_distance_correction_simplified, correct_observed_distances, compute_distance_correction_simplified_with_beta_inclusion, correct_observed_distances_mask, resort_order
+from .correction import compute_covariate_difference, compute_distance_correction_simplified, correct_observed_distances, compute_distance_correction_simplified_with_beta_inclusion, correct_observed_distances_mask, resort_order, remeasure_distances
 # , expand_knn_list, prune_knn_list, iterative_update, prune_only, inv_min_max_norm, G_from_adj_and_dist
 from .graph import mask_knn, get_re_expanded_adj_and_dist, prune_only_mask
 
@@ -40,11 +40,15 @@ def perform_analysis(obs_X, obs_knn_dist, covar_mat, k, locally_weighted=False):
 
 def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch, cutoff_threshold, original_mask, locally_weighted, skip_mask = False):
     # Create mask
+    print("original mask:")
+    print(original_mask)
     if skip_mask:
         knn_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
     else:
         knn_mask = torch.tensor(mask_knn(obs_knn_dist_torch, cutoff_threshold=cutoff_threshold), dtype=torch.bool)
-        knn_mask *= torch.tensor(original_mask, dtype=torch.bool)
+        knn_mask = knn_mask * torch.tensor(original_mask, dtype=torch.bool)
+    print("updated mask:")
+    print(knn_mask)
     # Compute the covariate difference
     covar_diff = compute_covariate_difference(
         obs_knn_adj_list, covar_mat_torch)
@@ -130,6 +134,24 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, locally_we
     return corrected_adj, corrected_obs_knn_dist, knn_mask, betas
 
 
+def sanity_check_for_adj(temp_adj, temp_mask):
+    for i in range(temp_adj.shape[0]):
+        temp_unq = torch.unique(temp_adj[i,temp_mask[i]])
+        #print("temp_unq")
+        #print(temp_unq)
+        #print("temp_adj.shape[1]", temp_adj.shape[1])
+        #print("temp_mask[i].sum()",temp_mask[i].sum())
+        if temp_unq.shape[0]<temp_adj.shape[1] and i%1000==0:
+            print(".......")
+            print("double check this!")
+            print(temp_adj[i,:])
+            print(temp_mask[i])
+        if temp_unq.shape[0]<temp_mask[i].sum():
+            return(False)
+    return(True)
+        
+
+
 def slicr_analysis(obs_X, 
                    covar_mat, 
                    k, 
@@ -166,21 +188,37 @@ def slicr_analysis(obs_X,
         #print(corrected_obs_knn_dist.shape)
         #print(knn_mask.shape)
         #print(int(round(k/2)))
+        assert sanity_check_for_adj(
+            obs_knn_adj_list, knn_mask), "failed sanity check at point 1"
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask = prune_only_mask(
             obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, int(round(k/2)))
+        assert sanity_check_for_adj(
+            new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 2"
         #print("post prune:")
         #print(obs_knn_adj_list.shape)
         #print(corrected_obs_knn_dist.shape)
         #print(knn_mask.shape)
         # expand to updated nearest neighbors
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask = get_re_expanded_adj_and_dist(
-            new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, k)
+            new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, k, local_iter=temp_iter)
+        assert sanity_check_for_adj(
+            new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 3"
         assert torch.all(new_corrected_obs_knn_dist >=
                          0), "There's a bug. The expanded distances have negatives"
+        ## Now we'll recalculate the distances
+        new_corrected_obs_knn_dist = remeasure_distances(new_obs_knn_adj_list, obs_X)
+        ## and resort them
+        new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask = resort_order(
+            new_obs_knn_adj_list,
+            new_corrected_obs_knn_dist,
+            new_knn_mask
+        )
         ## from here on out, we don't use the mask, to allow the points to crawl
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, betas = do_mask_and_regression(
             new_obs_knn_adj_list, new_corrected_obs_knn_dist,
             covar_mat, cutoff_threshold, new_knn_mask, False, skip_mask=False)  # locally_weighted=False
+        assert sanity_check_for_adj(
+            new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 4"
         ## now log the beta info
         betas=betas.numpy()
         abs_beta = np.mean(np.abs(betas), axis=0)

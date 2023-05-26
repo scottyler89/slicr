@@ -238,16 +238,39 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
 
 def resort_order(adj, dist, mask):
     for i in range(dist.shape[0]):
-        #print("\n")
-        #print(dist[i])
-        #print(adj[i])
-        new_order = np.argsort(dist[i,:])
-        adj[i]=adj[i,new_order]
-        dist[i]=dist[i,new_order]
-        mask[i] = mask[i, new_order]
-        #print(dist[i])
-        #print(adj[i])
-        assert dist[i, 2]-dist[i, 1] > 0, "WTF?"
+        # Only consider elements that are not masked
+        mask_indices = mask[i]
+        # Get the elements that are not masked
+        unmasked_adj = adj[i, mask_indices]
+        unmasked_dist = dist[i, mask_indices]
+        # Sort only the unmasked elements
+        new_order = torch.argsort(unmasked_dist)
+        # Reassign the unmasked, sorted elements back to their original positions
+        adj[i, mask_indices] = unmasked_adj[new_order]
+        dist[i, mask_indices] = unmasked_dist[new_order]
+        mask[i, mask_indices] = mask[i, mask_indices][new_order]
+        # Check the sorted order
+        if dist[i, 2]-dist[i, 1] < 0 :
+            print("dist[i, 2]-dist[i, 1] > 0")
+            print("dist[i, :]")
+            print(dist[i, :])
+            print("adj[i, :]")
+            print(adj[i, :])
+            assert dist[i, 2]-dist[i, 1] > 0, "WTF?"
     assert torch.all(dist[:, 2]-dist[:, 1]>0), "Sorted in the wrong order. This is a bug."
-    return(adj, dist, mask)
+    return (adj, dist, mask)
+
+
+def remeasure_distances(adj, obs_X):
+    # Index into obs_X using the adjacency list, this gives us a tensor of neighbors
+    neighbor_features = obs_X[adj]
+    # Calculate the difference between each observation and its neighbors
+    # We use None to add an extra dimension to obs_X for broadcasting
+    diffs = obs_X[:, None] - neighbor_features
+    # Square the differences
+    sq_diffs = diffs ** 2
+    # Sum over the feature dimension and take the square root to get the Euclidean distances
+    distances = np.sqrt(sq_diffs.sum(-1))
+    print(distances)
+    return(torch.tensor(distances))
 
