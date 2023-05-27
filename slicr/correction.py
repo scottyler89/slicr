@@ -205,7 +205,12 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
         obs_knn_dist_sds_adj[mask]/corrected_obs_knn_dist_sds_adj[mask]) + obs_knn_dist_means_adj[mask]
     # It's possible in weird circumstances, that the regression rotates something below zero (meaning)
     # that this would be even more similar to the point than itself. That's ridiculous. So no.
-    row_mins = corrected_obs_knn_dist.min(1)
+    # Set a large value
+    large_val = torch.full_like(corrected_obs_knn_dist, float('inf'))
+    # Use torch.where to apply the mask
+    masked_obs_knn_dist = torch.where(mask, corrected_obs_knn_dist, large_val)
+    # Calculate the row-wise minimums
+    row_mins = masked_obs_knn_dist.min(dim=1).values
     print("row_mins")
     print(row_mins)
     # go through the rows where the min is less than zero, then subtract the min value to that row
