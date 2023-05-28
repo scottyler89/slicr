@@ -210,7 +210,7 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     # Use torch.where to apply the mask
     masked_obs_knn_dist = torch.where(mask, corrected_obs_knn_dist, large_val)
     # Calculate the row-wise minimums
-    row_mins = masked_obs_knn_dist.min(dim=1).values
+    row_mins = masked_obs_knn_dist.min(dim=1)
     print("row_mins")
     print(row_mins)
     # go through the rows where the min is less than zero, then subtract the min value to that row

@@ -38,14 +38,19 @@ def perform_analysis(obs_X, obs_knn_dist, covar_mat, k, locally_weighted=False):
     return corrected_obs_knn_dist.numpy()
 
 
-def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch, cutoff_threshold, original_mask, locally_weighted, skip_mask = False):
+def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch, cutoff_threshold, original_mask, locally_weighted, skip_mask = False, skip_mean_mask = False):
     # Create mask
     print("original mask:")
     print(original_mask)
     if skip_mask:
         knn_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
     else:
-        knn_mask = torch.tensor(mask_knn(obs_knn_dist_torch, cutoff_threshold=cutoff_threshold), dtype=torch.bool)
+        knn_mask = torch.tensor(mask_knn(
+            obs_knn_dist_torch, 
+            cutoff_threshold=cutoff_threshold, 
+            skip_mean_mask=skip_mean_mask
+            ), dtype=torch.bool
+        )
         knn_mask = knn_mask * torch.tensor(original_mask, dtype=torch.bool)
     print("updated mask:")
     print(knn_mask)
@@ -216,7 +221,7 @@ def slicr_analysis(obs_X,
         ## from here on out, we don't use the mask, to allow the points to crawl
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, betas = do_mask_and_regression(
             new_obs_knn_adj_list, new_corrected_obs_knn_dist,
-            covar_mat, cutoff_threshold, new_knn_mask, False, skip_mask=False)  # locally_weighted=False
+            covar_mat, cutoff_threshold, new_knn_mask, False, skip_mask=False, skip_mean_mask = True)  # locally_weighted=False
         assert sanity_check_for_adj(
             new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 4"
         ## now log the beta info

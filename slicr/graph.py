@@ -133,7 +133,7 @@ def G_from_adj_and_dist(knn_adj_list, corrected_dist):
     return(G)
 
 
-def mask_knn(dists, cutoff_threshold=3, min_k=10):
+def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     """
     Generate a mask for k nearest neighbors based on a cutoff threshold.
     
@@ -163,18 +163,21 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10):
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
     dists = dists.numpy()
-    mean_dist = np.mean(dists[:,1:min_k])
-    sd_dist = np.std(dists[:, 1:min_k])
-    z_dist = dists[:, min_k:] - mean_dist
-    z_dist /= sd_dist
-    #sns.distplot(z_dist.flatten())
-    #plt.show()
     mask = np.ones_like(dists, dtype=bool)
-    mask[:,min_k:] = z_dist < cutoff_threshold
-    print("mean z mask:")
-    print(mask)
-    print("mean number connections:")
-    print(np.mean(np.sum(mask, axis=1)))
+    if not skip_mean_mask:
+        mean_dist = np.mean(dists[:,1:min_k])
+        sd_dist = np.std(dists[:, 1:min_k])
+        z_dist = dists[:, min_k:] - mean_dist
+        z_dist /= sd_dist
+        #sns.distplot(z_dist.flatten())
+        #plt.show()
+        mask[:,min_k:] = z_dist < cutoff_threshold
+        print("mean z mask:")
+        print(mask)
+        print("mean number connections:")
+        print(np.mean(np.sum(mask, axis=1)))
+    else:
+        pass
     ## now we'll also mask at big jumps
     diff_mask = np.ones_like(dists, dtype=bool)
     discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
