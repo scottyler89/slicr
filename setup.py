@@ -12,7 +12,7 @@ setup(
         'numpy',
         'scipy',
         'torch',
-        'sklearn',
+        'scikit-learn',
         'networkx',
     ],
     classifiers=[

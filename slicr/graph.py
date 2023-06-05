@@ -133,6 +133,108 @@ def G_from_adj_and_dist(knn_adj_list, corrected_dist):
     return(G)
 
 
+def mask_knn_mean_dist(dists, cutoff_threshold=3, min_k=10):
+    """
+    Generate a mask for k nearest neighbors based on a cutoff threshold.
+    
+    Parameters:
+    ----------
+    obs_knn_dist : numpy ndarray
+        A matrix of the distances to the k nearest neighbors in the observed data.
+
+    k : int
+        The number of nearest neighbors to consider.
+
+    cutoff_threshold : float
+        The relative gap threshold for considering a difference between sorted order distances.
+        This cutoff is the multiple of the mean sort-order difference for considering the distance.
+        "too big" to be kept. Getting to this point or farther away will be masked.
+        
+    Returns:
+    -------
+    mask : numpy ndarray
+        A binary mask matrix indicating which distances should be considered (1) and which should be ignored (0).
+
+    Examples:
+    --------
+    >>> obs_knn_dist = np.array(...)
+    >>> k = 10
+    >>> cutoff_threshold = 3.0
+    >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
+    """
+    mask = np.ones_like(dists, dtype=bool)
+    mean_dist = np.mean(dists[:,1:min_k])
+    sd_dist = np.std(dists[:, 1:min_k])
+    z_dist = dists[:, min_k:] - mean_dist
+    z_dist /= sd_dist
+    #sns.distplot(z_dist.flatten())
+    #plt.show()
+    mask[:,min_k:] = z_dist < cutoff_threshold
+    print("mean z mask:")
+    print(mask)
+    print("mean number connections:")
+    print(np.mean(np.sum(mask, axis=1)))
+    return(mask)
+
+
+def mask_knn_diff_dist(dists, cutoff_threshold=3, min_k=10):
+    """
+    Generate a mask for k nearest neighbors based on a cutoff threshold.
+    
+    Parameters:
+    ----------
+    obs_knn_dist : numpy ndarray
+        A matrix of the distances to the k nearest neighbors in the observed data.
+
+    k : int
+        The number of nearest neighbors to consider.
+
+    cutoff_threshold : float
+        The relative gap threshold for considering a difference between sorted order distances.
+        This cutoff is the multiple of the mean sort-order difference for considering the distance.
+        "too big" to be kept. Getting to this point or farther away will be masked.
+        
+    Returns:
+    -------
+    mask : numpy ndarray
+        A binary mask matrix indicating which distances should be considered (1) and which should be ignored (0).
+
+    Examples:
+    --------
+    >>> obs_knn_dist = np.array(...)
+    >>> k = 10
+    >>> cutoff_threshold = 3.0
+    >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
+    """
+    diff_mask = np.ones_like(dists, dtype=bool)
+    discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
+    discrete_diff -= np.mean(discrete_diff)
+    discrete_diff /= np.std(discrete_diff)
+    print("discrete_diff:")
+    print(discrete_diff)
+    # mask everything whose discrete difference is > threshold & farther
+    # So everything that's less than the cutoff is good to go, so set those to true
+    temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
+    print("temp_diff_mask_cutoff:")
+    print(temp_diff_mask_cutoff)
+    # finds the idxs with jumps (where there is a false)
+    idxs_with_diff_mask = np.where(
+        np.min(temp_diff_mask_cutoff, axis=1) == 0)[0]
+    for idx in idxs_with_diff_mask:
+        # then mask everything that is farther than the jump
+        # where are they false, then which index is lowest that is false
+        temp_gap_idx = np.min(
+            np.where(temp_diff_mask_cutoff[idx, :] == False)[0])
+        temp_diff_mask_cutoff[idx, temp_gap_idx:] = False
+    diff_mask[:, min_k:] = temp_diff_mask_cutoff
+    print("diff_mask")
+    print(diff_mask)
+    print("mean number connections:")
+    print(np.mean(np.sum(diff_mask, axis=1)))
+    return (diff_mask)
+
+
+
 def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     """
     Generate a mask for k nearest neighbors based on a cutoff threshold.
@@ -163,45 +265,38 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
     dists = dists.numpy()
-    mask = np.ones_like(dists, dtype=bool)
     if not skip_mean_mask:
-        mean_dist = np.mean(dists[:,1:min_k])
-        sd_dist = np.std(dists[:, 1:min_k])
-        z_dist = dists[:, min_k:] - mean_dist
-        z_dist /= sd_dist
-        #sns.distplot(z_dist.flatten())
-        #plt.show()
-        mask[:,min_k:] = z_dist < cutoff_threshold
-        print("mean z mask:")
-        print(mask)
-        print("mean number connections:")
-        print(np.mean(np.sum(mask, axis=1)))
+        mask = mask_knn_mean_dist(dists, cutoff_threshold=cutoff_threshold, min_k=min_k)
     else:
-        pass
+        mask = np.ones_like(dists, dtype=bool)
     ## now we'll also mask at big jumps
-    diff_mask = np.ones_like(dists, dtype=bool)
-    discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
-    discrete_diff -= np.mean(discrete_diff)
-    discrete_diff /= np.std(discrete_diff)
-    print("discrete_diff:")
-    print(discrete_diff)
-    # mask everything whose discrete difference is > threshold & farther
-    # So everything that's less than the cutoff is good to go, so set those to true
-    temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
-    print("temp_diff_mask_cutoff:")
-    print(temp_diff_mask_cutoff)
-    # finds the idxs with jumps (where there is a false)
-    idxs_with_diff_mask = np.where(np.min(temp_diff_mask_cutoff, axis=1)==0)[0]
-    for idx in idxs_with_diff_mask:
-        # then mask everything that is farther than the jump
-        # where are they false, then which index is lowest that is false
-        temp_gap_idx = np.min(np.where(temp_diff_mask_cutoff[idx,:]==False)[0])
-        temp_diff_mask_cutoff[idx, temp_gap_idx:]=False
-    diff_mask[:, min_k:] = temp_diff_mask_cutoff
-    print("diff_mask")
-    print(diff_mask)
-    print("mean number connections:")
-    print(np.mean(np.sum(diff_mask, axis=1)))
+    if False:
+        diff_mask = np.ones_like(dists, dtype=bool)
+        discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
+        discrete_diff -= np.mean(discrete_diff)
+        discrete_diff /= np.std(discrete_diff)
+        print("discrete_diff:")
+        print(discrete_diff)
+        # mask everything whose discrete difference is > threshold & farther
+        # So everything that's less than the cutoff is good to go, so set those to true
+        temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
+        print("temp_diff_mask_cutoff:")
+        print(temp_diff_mask_cutoff)
+        # finds the idxs with jumps (where there is a false)
+        idxs_with_diff_mask = np.where(np.min(temp_diff_mask_cutoff, axis=1)==0)[0]
+        for idx in idxs_with_diff_mask:
+            # then mask everything that is farther than the jump
+            # where are they false, then which index is lowest that is false
+            temp_gap_idx = np.min(np.where(temp_diff_mask_cutoff[idx,:]==False)[0])
+            temp_diff_mask_cutoff[idx, temp_gap_idx:]=False
+        diff_mask[:, min_k:] = temp_diff_mask_cutoff
+        print("diff_mask")
+        print(diff_mask)
+        print("mean number connections:")
+        print(np.mean(np.sum(diff_mask, axis=1)))
+    else:
+        diff_mask = mask_knn_diff_dist(
+            dists, cutoff_threshold=cutoff_threshold, min_k=min_k)
     # merge the masks
     mask = mask * diff_mask
     print("final mask:")
@@ -310,8 +405,30 @@ def get_re_expanded_adj_and_dist(pruned_adj, pruned_dists, mask, k, epsilon = 1e
         combined_dists = first_neighbor_dists.view(
             -1, 1) + second_neighbor_dists
         # Create a mask to ignore the self-connections, but keep first neighbors
-        ## TODO: incorporate the prior mask as well
-        temp_mask = (second_neighbors != node)
+        #########################################################
+        ## DONE: incorporate the prior mask as well
+        previously_masked_nodes = first_neighbors[~mask[node, :]]
+        #print("previously_masked_nodes.shape",previously_masked_nodes.shape)
+        #print("second_neighbors.shape",second_neighbors.shape)
+        #print("node:",node)
+        #temp_mask = (second_neighbors != node)
+        # Create a tensor from the node and expand it to match second_neighbors shape
+        node_tensor = torch.tensor(node).expand(*second_neighbors.shape)
+        # Handle the case when previously_masked_nodes is empty
+        if len(previously_masked_nodes) == 0:
+            # If there are no previously_masked_nodes, then all second_neighbors are valid (not in previously_masked_nodes)
+            previously_masked_nodes_condition = torch.ones_like(second_neighbors, dtype=torch.bool)
+        else:
+            # If there are previously_masked_nodes, do the comparison
+            second_neighbors_expanded = second_neighbors.unsqueeze(-1).expand(-1, -1, len(previously_masked_nodes))
+            previously_masked_nodes_expanded = previously_masked_nodes.unsqueeze(0).unsqueeze(0).expand(*second_neighbors.shape, -1)
+            previously_masked_nodes_condition = ~torch.any(second_neighbors_expanded == previously_masked_nodes_expanded, dim=-1)
+        # Create temp_mask
+        temp_mask = (second_neighbors != node_tensor) & previously_masked_nodes_condition
+        #second_neighbors_expanded = second_neighbors.unsqueeze(2).expand(-1, -1, len(previously_masked_nodes))
+        #previously_masked_nodes_expanded = previously_masked_nodes.unsqueeze(0).unsqueeze(0).expand(second_neighbors.shape[0], second_neighbors.shape[1], -1)
+        #temp_mask = (second_neighbors != node.unsqueeze(1)) & (~torch.any(second_neighbors_expanded == previously_masked_nodes_expanded, dim=2))
+        #######################################################
         #print("temp_mask\n", temp_mask)
         #print("temp_mask.shape:",temp_mask.shape)
         # Apply the mask to the combined_neighbors and combined_dists

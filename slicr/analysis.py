@@ -7,7 +7,7 @@ from .utils import convert_to_torch_sparse
 from .correction import compute_covariate_difference, compute_distance_correction_simplified, correct_observed_distances, compute_distance_correction_simplified_with_beta_inclusion, correct_observed_distances_mask, resort_order, remeasure_distances
 # , expand_knn_list, prune_knn_list, iterative_update, prune_only, inv_min_max_norm, G_from_adj_and_dist
 from .graph import mask_knn, get_re_expanded_adj_and_dist, prune_only_mask
-
+from .results import AnalysisResults
 
 
 def perform_analysis(obs_X, obs_knn_dist, covar_mat, k, locally_weighted=False):
@@ -38,7 +38,7 @@ def perform_analysis(obs_X, obs_knn_dist, covar_mat, k, locally_weighted=False):
     return corrected_obs_knn_dist.numpy()
 
 
-def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch, cutoff_threshold, original_mask, locally_weighted, skip_mask = False, skip_mean_mask = False):
+def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch, cutoff_threshold, original_mask, min_k, locally_weighted, skip_mask = False, skip_mean_mask = False):
     # Create mask
     print("original mask:")
     print(original_mask)
@@ -75,12 +75,17 @@ def do_mask_and_regression(obs_knn_adj_list, obs_knn_dist_torch, covar_mat_torch
     corrected_adj, corrected_obs_knn_dist, knn_mask = resort_order(
         obs_knn_adj_list,
         corrected_obs_knn_dist,
-        knn_mask
+        knn_mask,
+        min_k
     )
-    return corrected_adj, corrected_obs_knn_dist, knn_mask, betas
+    ## TODO: change to torch nomencalture for this
+    abs_beta = np.mean(np.abs(betas.numpy()),axis=0)
+    # Also catelogue the sum of the total effects, so that we can 
+    total_beta = np.sum(abs_beta)
+    return corrected_adj, corrected_obs_knn_dist, knn_mask, betas, total_beta
 
 
-def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, locally_weighted=False):
+def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, min_k, results=None, detailed_log=False, locally_weighted=False):
     """
     Perform the entire analysis pipeline, which includes nearest neighbors search, distance correction, adjacency list expansion, and iterative update, incorporating a mask matrix to indicate values to be included.
 
@@ -114,9 +119,10 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, locally_we
     >>> obs_X = csr_matrix(...)
     >>> obs_knn_dist = np.array(...)
     >>> covar_mat = np.array(...)
-    >>> k = 10
-    >>> cutoff_threshold = 3.0
-    >>> corrected_obs_knn_dist = perform_analysis_with_mask(obs_X, obs_knn_dist, covar_mat, k, cutoff_threshold)
+    >>> k = 20
+    >>> min_k = 10
+    >>> cutoff_threshold = 1.0
+    >>> corrected_obs_knn_dist = perform_analysis_with_mask(obs_X, obs_knn_dist, covar_mat, k, cutoff_threshold, min_k)
     """
     # Check input types and formats
     # assert isinstance(obs_X, csr_matrix), "obs_X must be a scipy csr_matrix"
@@ -132,24 +138,34 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, locally_we
     obs_knn_dist_torch = torch.tensor(obs_knn_dist_torch)
     obs_knn_adj_list = torch.tensor(obs_knn_adj_list, dtype=torch.long)
     original_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
-    corrected_adj, corrected_obs_knn_dist, knn_mask, betas = do_mask_and_regression(
+    if detailed_log:
+        results.log_results(obs_knn_adj_list.clone(), obs_knn_dist_torch.clone(), original_mask.clone(), None, None)
+    corrected_adj, corrected_obs_knn_dist, knn_mask, betas, total_beta = do_mask_and_regression(
         obs_knn_adj_list, obs_knn_dist_torch,
-        covar_mat_torch, cutoff_threshold, original_mask, locally_weighted)
+        covar_mat_torch, cutoff_threshold, original_mask, locally_weighted, min_k)
+    if detailed_log:
+        results.log_results(
+            corrected_adj.clone(), 
+            corrected_obs_knn_dist.clone(),
+            knn_mask.clone(), 
+            betas,
+            total_beta)
     # Convert corrected distances back to numpy and return
-    return corrected_adj, corrected_obs_knn_dist, knn_mask, betas
+    return corrected_adj, corrected_obs_knn_dist, knn_mask, betas, total_beta
 
 
 def sanity_check_for_adj(temp_adj, temp_mask):
+    print("sanity check:")
     for i in range(temp_adj.shape[0]):
         temp_unq = torch.unique(temp_adj[i,temp_mask[i]])
         #print("temp_unq")
         #print(temp_unq)
         #print("temp_adj.shape[1]", temp_adj.shape[1])
         #print("temp_mask[i].sum()",temp_mask[i].sum())
-        if temp_unq.shape[0]<temp_adj.shape[1] and i%1000==0:
-            print(".......")
-            print("double check this!")
-            print(temp_adj[i,:])
+        if temp_unq.shape[0] < temp_adj.shape[1] and i % int(temp_adj.shape[0]/3) == 0:
+            print("temp_adj[i,:]")
+            print(temp_adj[i, :])
+            print("temp_mask[i]")
             print(temp_mask[i])
         if temp_unq.shape[0]<temp_mask[i].sum():
             return(False)
@@ -163,22 +179,25 @@ def slicr_analysis(obs_X,
                    cutoff_threshold,
                    min_k=10,
                    relative_beta_removal=0.85,
-                   max_iters=100):
+                   shrink_percentage=0.75,
+                   max_iters=100,
+                   detailed_log=False):
     assert k>min_k, "the min_k variable must be higher than k"
+    results = AnalysisResults()
     ## initialize the correction
     covar_mat = torch.tensor(covar_mat)
-    obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, betas = perform_analysis_with_mask(
-        obs_X, covar_mat, k, cutoff_threshold)
+    obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, betas, temp_total_beta = perform_analysis_with_mask(
+        obs_X, covar_mat, k, cutoff_threshold, min_k, results, detailed_log = detailed_log)
     assert torch.all(corrected_obs_knn_dist >=
                      0), "There's a bug. The first round distances have negatives"
     print(betas)
     # log the mean absolute betas to quantify magnitude of 
     # covariate effects
-    ## TODO: figure out torch nomencalture for this
+    ## TODO: change to torch nomencalture for this
     abs_beta = np.mean(np.abs(betas.numpy()),axis=0)
     abs_beta_list = [abs_beta.tolist()]
     # Also catelogue the sum of the total effects, so that we can 
-    total_beta = [np.sum(abs_beta)]
+    total_beta = [temp_total_beta]
     print("mean absolute betas for initialization round",":")
     print(abs_beta_list[-1])
     # we'll stop correcting either the first time that
@@ -196,7 +215,7 @@ def slicr_analysis(obs_X,
         assert sanity_check_for_adj(
             obs_knn_adj_list, knn_mask), "failed sanity check at point 1"
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask = prune_only_mask(
-            obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, int(round(k/2)))
+            obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, int(round(k*shrink_percentage)))
         assert sanity_check_for_adj(
             new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 2"
         #print("post prune:")
@@ -216,28 +235,40 @@ def slicr_analysis(obs_X,
         new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask = resort_order(
             new_obs_knn_adj_list,
             new_corrected_obs_knn_dist,
-            new_knn_mask
+            new_knn_mask,
+            min_k
         )
+        if detailed_log:
+            results.log_results(
+                new_obs_knn_adj_list.clone(),
+                new_corrected_obs_knn_dist.clone(),
+                new_knn_mask.clone(),
+                None,
+                None)
         ## from here on out, we don't use the mask, to allow the points to crawl
-        new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, betas = do_mask_and_regression(
+        new_obs_knn_adj_list, new_corrected_obs_knn_dist, new_knn_mask, betas, temp_total_beta = do_mask_and_regression(
             new_obs_knn_adj_list, new_corrected_obs_knn_dist,
-            covar_mat, cutoff_threshold, new_knn_mask, False, skip_mask=False, skip_mean_mask = True)  # locally_weighted=False
+            covar_mat, cutoff_threshold, new_knn_mask, False, min_k, skip_mask=False, skip_mean_mask = True)  # locally_weighted=False
+        if detailed_log:
+            results.log_results(
+                new_obs_knn_adj_list.clone(),
+                new_corrected_obs_knn_dist.clone(),
+                new_knn_mask.clone(),
+                betas,
+                temp_total_beta)
         assert sanity_check_for_adj(
             new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 4"
-        ## now log the beta info
-        betas=betas.numpy()
-        abs_beta = np.mean(np.abs(betas), axis=0)
+        # Also catelogue the sum of the total effects, so that we can
+        total_beta.append(temp_total_beta)
         ## check for convergance
         percent_removed = 1-(total_beta[-1]/total_beta[0])
         print("iter:",temp_iter)
         print("percent local covariate effect removed:", percent_removed)
         print(total_beta[-1], "/", total_beta[0],
                 "=", total_beta[-1]/total_beta[0])
-        abs_beta_list.append(abs_beta.tolist())
+        abs_beta_list.append(np.abs(betas.numpy()).tolist())
         print("mean absolute betas for round",temp_iter,":")
         print(abs_beta_list[-1])
-        # Also catelogue the sum of the total effects, so that we can
-        total_beta.append(np.sum(abs_beta))
         ## check for early stopping
         early_stop = False
         if len(total_beta)>2:

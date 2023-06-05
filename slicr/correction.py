@@ -241,7 +241,10 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     return corrected_obs_knn_dist
 
 
-def resort_order(adj, dist, mask):
+def resort_order(adj, dist, mask, min_k):
+    out_adj = adj.clone()
+    out_dist = dist.clone()
+    out_mask = mask.clone()
     for i in range(dist.shape[0]):
         # Only consider elements that are not masked
         mask_indices = mask[i]
@@ -251,19 +254,25 @@ def resort_order(adj, dist, mask):
         # Sort only the unmasked elements
         new_order = torch.argsort(unmasked_dist)
         # Reassign the unmasked, sorted elements back to their original positions
-        adj[i, mask_indices] = unmasked_adj[new_order]
-        dist[i, mask_indices] = unmasked_dist[new_order]
-        mask[i, mask_indices] = mask[i, mask_indices][new_order]
+        out_adj[i, mask_indices] = unmasked_adj[new_order]
+        out_dist[i, mask_indices] = unmasked_dist[new_order]
+        out_mask[i, mask_indices] = mask[i, mask_indices][new_order]
         # Check the sorted order
-        if dist[i, 2]-dist[i, 1] < 0 :
-            print("dist[i, 2]-dist[i, 1] > 0")
-            print("dist[i, :]")
-            print(dist[i, :])
-            print("adj[i, :]")
-            print(adj[i, :])
-            assert dist[i, 2]-dist[i, 1] > 0, "WTF?"
-    assert torch.all(dist[:, 2]-dist[:, 1]>0), "Sorted in the wrong order. This is a bug."
-    return (adj, dist, mask)
+        if out_dist[i, 2]-out_dist[i, 1] < 0 :
+            print("out_mask[i, 2]-out_mask[i, 1] > 0")
+            print("out_mask[i, :]")
+            print(out_mask[i, :])
+            print("out_adj[i, :]")
+            print(out_adj[i, :])
+            assert out_dist[i, 2]-out_dist[i, 1] > 0, "WTF?"
+    # This should be rather rare, but un-mask anything that was previously masked, but we
+    # didn't have enough un-masked
+    #out_mask[:,:min_k]=True
+    assert torch.all(
+        out_mask[:, :min_k] == True), "somehow we ended up with masked indices in min_k"
+    assert torch.all(
+        out_dist[:, 2]-out_dist[:, 1]>0), "Sorted in the wrong order. This is a bug."
+    return (out_adj, out_dist, out_mask)
 
 
 def remeasure_distances(adj, obs_X):
