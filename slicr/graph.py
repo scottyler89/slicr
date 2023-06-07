@@ -1,4 +1,5 @@
 ## graph.py
+import unittest
 import torch
 import numpy as np
 import networkx as nx
@@ -78,21 +79,25 @@ def prune_only_mask(adj, dists, mask, new_k):
     assert adj.shape[1]>= new_k, "need to have a greater number of k connections in the original graph compared to the new_k we're trying to prune to"
     return(adj[:,:new_k], dists[:,:new_k], mask[:,:new_k])
 
-"""     out_adj = np.zeros((adj.shape[0], new_k))
-    out_dists = np.zeros((adj.shape[0], new_k))
-    # create a new mask with the same size
-    out_mask = np.zeros((mask.shape[0], new_k), dtype=bool)
-    for node in range(adj.shape[0]):
-        # mask the distances and adjacency array
-        masked_dists = dists[node, mask[node]]
-        masked_adj = adj[node, mask[node]]
-        # sort only the unmasked distances
-        top_k_idxs = np.argsort(masked_dists)[:new_k]
-        out_adj[node, :] = masked_adj[top_k_idxs]
-        out_dists[node, :] = masked_dists[top_k_idxs]
-        out_mask[node, :] = mask[node, top_k_idxs]
-    return (out_adj, out_dists, out_mask)
- """
+
+def prune_only_mask_percent(adj, dists, mask, min_k, shrink_percentage):
+    # We may not end up using this. Still deciding
+    """
+    Prune a k-nearest neighbors adjacency list and the associated distances so that only the top k neighbors with the smallest distances are kept. 
+    Also uses a mask to ignore certain values.
+    """
+    new_k_shape = max(min_k, int(round(adj.shape[1]*shrink_percentage)))
+    num_connections_per_node = torch.clamp(torch.round(
+        torch.sum(mask.float(), dim=1) * shrink_percentage), min=min_k).long()
+    out_mask = mask[:, :new_k_shape]
+    # Now make sure that everything past the `num_connections_per_node` is False in the output mask
+    range_tensor = torch.arange(new_k_shape).unsqueeze(0).expand(
+        out_mask.size(0), -1).to(num_connections_per_node.device)
+    valid_mask = range_tensor < num_connections_per_node.unsqueeze(1)
+    out_mask = out_mask & valid_mask
+    return (adj[:, :new_k_shape], dists[:, :new_k_shape], out_mask)
+
+
 
 def inv_min_max_norm(in_vect, epsilon=1e-8):
     """
@@ -162,18 +167,36 @@ def mask_knn_mean_dist(dists, cutoff_threshold=3, min_k=10):
     >>> cutoff_threshold = 3.0
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
-    mask = np.ones_like(dists, dtype=bool)
-    mean_dist = np.mean(dists[:,1:min_k])
-    sd_dist = np.std(dists[:, 1:min_k])
+    ##############################
+    # OLD NUMPY CODE
+    #mask = np.ones_like(dists, dtype=bool)
+    #mean_dist = np.mean(dists[:,1:min_k])
+    #sd_dist = np.std(dists[:, 1:min_k])
+    #z_dist = dists[:, min_k:] - mean_dist
+    #z_dist /= sd_dist
+    ##sns.distplot(z_dist.flatten())
+    ##plt.show()
+    #mask[:,min_k:] = z_dist < cutoff_threshold
+    #print("mean z mask:")
+    #print(mask)
+    #print("mean number connections:")
+    #print(np.mean(np.sum(mask, axis=1)))
+    #############################
+    # Create a boolean tensor with ones (True) of the same shape as dists
+    mask = torch.ones_like(dists, dtype=torch.bool)
+    # Calculate the mean and standard deviation of the relevant slice of dists
+    mean_dist = torch.mean(dists[:, 1:min_k])
+    sd_dist = torch.std(dists[:, 1:min_k])
+    # Standardize the relevant slice of dists
     z_dist = dists[:, min_k:] - mean_dist
     z_dist /= sd_dist
-    #sns.distplot(z_dist.flatten())
-    #plt.show()
-    mask[:,min_k:] = z_dist < cutoff_threshold
+    # Adjust the mask based on the cutoff threshold
+    mask[:, min_k:] = z_dist < cutoff_threshold
+    # Print diagnostics
     print("mean z mask:")
     print(mask)
     print("mean number connections:")
-    print(np.mean(np.sum(mask, axis=1)))
+    print(torch.mean(torch.sum(mask, dtype=torch.float32, dim=1)))
     return(mask)
 
 
@@ -206,32 +229,212 @@ def mask_knn_diff_dist(dists, cutoff_threshold=3, min_k=10):
     >>> cutoff_threshold = 3.0
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
-    diff_mask = np.ones_like(dists, dtype=bool)
-    discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
-    discrete_diff -= np.mean(discrete_diff)
-    discrete_diff /= np.std(discrete_diff)
-    print("discrete_diff:")
+    #################################
+    ## OLD NUMPY
+    #diff_mask = np.ones_like(dists, dtype=bool)
+    #discrete_diff = np.diff(dists[:, (min_k-1):], axis=1)
+    #discrete_diff -= np.mean(discrete_diff)
+    #discrete_diff /= np.std(discrete_diff)
+    #print("standardized discrete_diff:")
+    #print(discrete_diff)
+    ## mask everything whose discrete difference is > threshold & farther
+    ## So everything that's less than the cutoff is good to go, so set those to true
+    #temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
+    #print("temp_diff_mask_cutoff:")
+    #print(temp_diff_mask_cutoff)
+    ## finds the idxs with jumps (where there is a false)
+    #idxs_with_diff_mask = np.where(
+    #    np.min(temp_diff_mask_cutoff, axis=1) == 0)[0]
+    #for idx in idxs_with_diff_mask:
+    #    # then mask everything that is farther than the jump
+    #    # where are they false, then which index is lowest that is false
+    #    temp_gap_idx = np.min(
+    #        np.where(temp_diff_mask_cutoff[idx, :] == False)[0])
+    #    temp_diff_mask_cutoff[idx, temp_gap_idx:] = False
+    #diff_mask[:, min_k:] = temp_diff_mask_cutoff
+    #print("diff_mask")
+    #print(diff_mask)
+    #print("mean number connections:")
+    # print(np.mean(np.sum(diff_mask, axis=1)))
+    ##################################
+    # Create a boolean tensor with ones (True) of the same shape as dists
+    # Create a boolean tensor with ones (True) of the same shape as dists
+    diff_mask = torch.ones_like(dists, dtype=torch.bool)
+    # Calculate the discrete difference of the relevant slice of dists
+    discrete_diff = dists[:, min_k:] - dists[:, (min_k-1):-1]
+    # Standardize the discrete difference
+    discrete_diff -= torch.mean(discrete_diff)
+    discrete_diff /= torch.std(discrete_diff)
+    print("standardized discrete_diff:")
     print(discrete_diff)
-    # mask everything whose discrete difference is > threshold & farther
-    # So everything that's less than the cutoff is good to go, so set those to true
+    # Create a temporary mask for values below the cutoff threshold
     temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
     print("temp_diff_mask_cutoff:")
     print(temp_diff_mask_cutoff)
-    # finds the idxs with jumps (where there is a false)
-    idxs_with_diff_mask = np.where(
-        np.min(temp_diff_mask_cutoff, axis=1) == 0)[0]
+    # Find indices with a jump (where there is a false)
+    idxs_with_diff_mask = (torch.min(temp_diff_mask_cutoff,
+                                     dim=1).values == 0).nonzero(as_tuple=True)[0]
     for idx in idxs_with_diff_mask:
-        # then mask everything that is farther than the jump
-        # where are they false, then which index is lowest that is false
-        temp_gap_idx = np.min(
-            np.where(temp_diff_mask_cutoff[idx, :] == False)[0])
+        # Then mask everything that is farther than the jump
+        # Where are they false, then which index is lowest that is false
+        temp_gap_idx = (temp_diff_mask_cutoff[idx, :] == False).nonzero(
+            as_tuple=True)[0].min()
         temp_diff_mask_cutoff[idx, temp_gap_idx:] = False
     diff_mask[:, min_k:] = temp_diff_mask_cutoff
     print("diff_mask")
     print(diff_mask)
     print("mean number connections:")
-    print(np.mean(np.sum(diff_mask, axis=1)))
+    print(torch.mean(torch.sum(diff_mask.float(), dim=1)))
     return (diff_mask)
+
+
+def masked_mean_std(input_tensor, mask, epsilon=1e-8):
+    # Make sure the mask is a bool tensor
+    mask = mask.bool()
+    # Count the number of True values in each row
+    count = mask.sum(dim=1, keepdim=True).float()
+    # Apply mask
+    masked_tensor = input_tensor * mask
+    # Compute sum
+    masked_sum = masked_tensor.sum(dim=1, keepdim=True)
+    # Compute mean
+    mean = masked_sum / count
+    # Compute variance
+    variance = (masked_tensor - mean) ** 2
+    variance[variance<epsilon]=epsilon
+    masked_variance = (variance * mask).sum(dim=1, keepdim=True) / count
+    # Compute standard deviation
+    std = torch.sqrt(masked_variance)
+    return mean, std
+
+
+def masked_mad(input_tensor, mask, epsilon = 1e-8):
+    # Make sure the mask is a bool tensor
+    mask = mask.bool()
+    # Apply mask
+    masked_tensor = input_tensor * mask
+    # Calculate median
+    med = torch.median(masked_tensor, dim=1).values.unsqueeze(1)
+    # Calculate Median Absolute Deviation
+    mad = torch.median(torch.abs(masked_tensor - med),
+                       dim=1).values.unsqueeze(1)
+    mad[mad < epsilon] = epsilon
+    return med, mad
+
+
+def get_mad_ratio(input_tensor, mask):
+    med, mad = masked_mad(input_tensor, mask)
+    return (input_tensor - med)/mad
+
+
+def mask_knn_local_diff_dist(dists, prior_mask, cutoff_threshold=3, min_k=10):
+    """
+    Generate a mask for k nearest neighbors based on a cutoff threshold.
+    
+    Parameters:
+    ----------
+    obs_knn_dist : numpy ndarray
+        A matrix of the distances to the k nearest neighbors in the observed data.
+
+    k : int
+        The number of nearest neighbors to consider.
+
+    cutoff_threshold : float
+        The relative gap threshold for considering a difference between sorted order distances.
+        This cutoff is the multiple of the mean sort-order difference for considering the distance.
+        "too big" to be kept. Getting to this point or farther away will be masked.
+        
+    Returns:
+    -------
+    mask : numpy ndarray
+        A binary mask matrix indicating which distances should be considered (1) and which should be ignored (0).
+
+    Examples:
+    --------
+    >>> obs_knn_dist = np.array(...)
+    >>> k = 10
+    >>> cutoff_threshold = 3.0
+    >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
+    """
+    print("dists.shape:",dists.shape)
+    print("min_k:",min_k)
+    print("mean number connections BEFORE local masking:")
+    print(torch.mean(torch.sum(prior_mask.float(), dim=1)))
+    # Create a boolean tensor with ones (True) of the same shape as dists
+    diff_mask = torch.ones_like(dists, dtype=torch.bool)
+    # Calculate the discrete difference of the relevant slice of dists
+    discrete_diff = dists[:, (min_k+1):] - dists[:, min_k:-1]
+    # Now subset the prior mask to make it compatible
+    prior_mask_diff = prior_mask[:, (min_k+1):]
+    #print("discrete_diff:",discrete_diff)
+    # Standardize the discrete difference
+    #print("discrete_diff.shape:",discrete_diff.shape)
+    #print("prior_mask_diff.shape:",prior_mask_diff.shape)
+    discrete_diff = get_mad_ratio(discrete_diff, prior_mask_diff)
+    #print("standardized discrete_diff:")
+    #print(discrete_diff)
+    # Create a temporary mask for values below the cutoff threshold
+    temp_diff_mask_cutoff = discrete_diff < cutoff_threshold
+    # Apply prior_mask to temp_diff_mask_cutoff
+    temp_diff_mask_cutoff = temp_diff_mask_cutoff & prior_mask_diff
+    #print("temp_diff_mask_cutoff with prior mask applied:")
+    #print(temp_diff_mask_cutoff)
+    # Find indices with a jump (where there is a false)
+    idxs_with_diff_mask = (torch.min(temp_diff_mask_cutoff,
+                                     dim=1).values == 0).nonzero(as_tuple=True)[0]
+    for idx in idxs_with_diff_mask:
+        # Then mask everything that is farther than the jump
+        # Where are they false, then which index is lowest that is false
+        temp_gap_idx = (temp_diff_mask_cutoff[idx, :] == False).nonzero(
+            as_tuple=True)[0].min()
+        temp_diff_mask_cutoff[idx, temp_gap_idx:] = False
+    # Apply prior_mask to diff_mask
+    diff_mask = diff_mask & prior_mask
+    diff_mask[:, (min_k+1):] = temp_diff_mask_cutoff
+    print("diff_mask")
+    print(diff_mask)
+    print("mean number connections after local masking:")
+    print(torch.mean(torch.sum(diff_mask.float(), dim=1)))
+    return diff_mask
+
+
+def test_mask_knn_local_diff_dist():
+    # Set up some test data.
+    # Here, we will use a simple square distance matrix with ascending values in each row
+    dists = torch.arange(1, 21, dtype=torch.float32).repeat(100, 1)
+    # All elements of prior_mask are set to True
+    prior_mask = torch.ones_like(dists, dtype=torch.bool)
+    # Use a cutoff threshold of 3
+    cutoff_threshold = 3.0
+    # The number of nearest neighbors to consider is 10
+    min_k = 10
+    # Call the function on our test data
+    output_mask = mask_knn_local_diff_dist(
+        dists, prior_mask, cutoff_threshold, min_k)
+    # Since our distance matrix has a simple structure and prior_mask includes all elements,
+    # we can manually specify the expected output
+    # Since we have ascending values in each row and our cutoff threshold is 3.0,
+    # no jumps are larger than this threshold and all values should be included in the mask
+    expected_mask = torch.ones_like(dists, dtype=torch.bool)
+    # Assert that the output from the function matches our expectation
+    assert torch.all(
+        output_mask == expected_mask), "mask_knn_local_diff_dist does not give the expected result w/o masking vals"
+    print("mask_knn_local_diff_dist passed the test without masking.")
+    ## Now test it with vals that need masking
+    dists[0,15:]=dists[0,15:]+100
+    print(dists)
+    expected_mask[0,15:] = False
+    # Call the function on our test data
+    output_mask = mask_knn_local_diff_dist(
+        dists, prior_mask, cutoff_threshold, min_k)
+    assert torch.all(
+        output_mask == expected_mask), "mask_knn_local_diff_dist does not give the expected result w/ masking vals"
+    print("mask_knn_local_diff_dist passed the test with masking.")
+    
+
+
+# Run the test
+#test_mask_knn_local_diff_dist()
 
 
 
@@ -264,11 +467,11 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     >>> cutoff_threshold = 3.0
     >>> mask = mask_knn(obs_knn_dist, k, cutoff_threshold)
     """
-    dists = dists.numpy()
+    # dists = dists.numpy()
     if not skip_mean_mask:
         mask = mask_knn_mean_dist(dists, cutoff_threshold=cutoff_threshold, min_k=min_k)
     else:
-        mask = np.ones_like(dists, dtype=bool)
+        mask = torch.ones_like(dists, dtype=bool)
     ## now we'll also mask at big jumps
     if False:
         diff_mask = np.ones_like(dists, dtype=bool)
@@ -297,12 +500,21 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     else:
         diff_mask = mask_knn_diff_dist(
             dists, cutoff_threshold=cutoff_threshold, min_k=min_k)
+    ##########################
+    ## OLD NUMPY
     # merge the masks
-    mask = mask * diff_mask
+    #mask = mask * diff_mask
+    #print("final mask:")
+    #print(mask)
+    #print("mean number connections:")
+    #print(np.mean(np.sum(mask, axis=1)))
+    ##########################
+    # Merge the masks
+    mask = mask & diff_mask
     print("final mask:")
     print(mask)
     print("mean number connections:")
-    print(np.mean(np.sum(mask, axis=1)))
+    print(torch.mean(torch.sum(mask.float(), dim=1)))
     return(mask)
 
 
@@ -490,15 +702,171 @@ def get_re_expanded_adj_and_dist(pruned_adj, pruned_dists, mask, k, epsilon = 1e
     print("avg number connections:",np.mean(np.sum(new_mask.numpy(), axis=1)))
     if local_iter>2 and debug:
         print("iter:", local_iter)
-        # print(poop)
     return new_adj, new_dists, new_mask
 
 
 
 
 
+################################
+def get_re_expanded_adj_and_dist_2_electric_boogaloo(pruned_adj, pruned_dists, mask, k, epsilon=1e-8, debug=False, local_iter=0):
+    # Number of nodes
+    n_nodes = pruned_adj.shape[0]
+    # Initialize the new adjacency list, distance list and mask
+    new_adj = torch.zeros((n_nodes, k), dtype=torch.long)
+    new_adj[:, 0] = torch.arange(n_nodes, dtype=torch.long)
+    new_dists = torch.zeros((n_nodes, k))
+    new_mask = torch.zeros((n_nodes, k), dtype=torch.bool)
+    new_mask[:, 0] = True
+    # Process each node
+    for node in range(n_nodes):
+        temp_k = 0
+        same_as_last = False
+        while temp_k < (k - 1) and same_as_last == False:
+            # Get the first neighbors and their distances
+            first_neighbors = pruned_adj[node, :]
+            # print("first_neighbors", first_neighbors)
+            first_neighbor_dists = pruned_dists[node, :]
+            # print("first_neighbor_dists", first_neighbor_dists)
+            # Get the second neighbors and their distances
+            second_neighbors = pruned_adj[first_neighbors, :]
+            second_neighbor_dists = pruned_dists[first_neighbors, :]
+            # we'll assume that the nearest non-self is 'as close as you can get'
+            first_neighbor_dists_offset = first_neighbor_dists.clone()
+            first_neighbor_dists_offset[1:] = first_neighbor_dists[1:] - \
+                first_neighbor_dists[1]+epsilon
+            # reset the self distance to zero
+            first_neighbor_dists_offset[0] = 0
+            # print(first_neighbor_dists)
+            # print(first_neighbor_dists_offset)
+            # Expand first_neighbor_dists to match the shape of second_neighbor_dists
+            first_neighbor_dists_expanded = first_neighbor_dists_offset.unsqueeze(
+                1).expand_as(second_neighbor_dists)
+            # Now, add them together
+            combined_dists = first_neighbor_dists_expanded + second_neighbor_dists
+            if not torch.all(combined_dists >= 0):
+                print("first_neighbor_dists_offset")
+                print(first_neighbor_dists_offset)
+                print("second_neighbor_dists")
+                print(second_neighbor_dists)
+                print("combined_dists")
+                print(combined_dists)
+                assert False, "Combined_dists is negative. This is a bug."
+            # now reset the first neighbors to their actual distances
+            combined_dists[:, 0] = pruned_dists[node, :]
+            # print(pruned_dists[first_neighbors, :]-combined_dists)
+            # Compute the total distances to the second neighbors by adding the first neighbors' distances
+            combined_dists = first_neighbor_dists.view(
+                -1, 1) + second_neighbor_dists
+            # Create a mask to ignore the self-connections, but keep first neighbors
+            #########################################################
+            # DONE: incorporate the prior mask as well
+            previously_masked_nodes = first_neighbors[~mask[node, :]]
+            # print("previously_masked_nodes.shape",previously_masked_nodes.shape)
+            # print("second_neighbors.shape",second_neighbors.shape)
+            # print("node:",node)
+            # temp_mask = (second_neighbors != node)
+            # Create a tensor from the node and expand it to match second_neighbors shape
+            node_tensor = torch.tensor(node).expand(*second_neighbors.shape)
+            # Handle the case when previously_masked_nodes is empty
+            if len(previously_masked_nodes) == 0:
+                # If there are no previously_masked_nodes, then all second_neighbors are valid (not in previously_masked_nodes)
+                previously_masked_nodes_condition = torch.ones_like(
+                    second_neighbors, dtype=torch.bool)
+            else:
+                # If there are previously_masked_nodes, do the comparison
+                second_neighbors_expanded = second_neighbors.unsqueeze(
+                    -1).expand(-1, -1, len(previously_masked_nodes))
+                previously_masked_nodes_expanded = previously_masked_nodes.unsqueeze(
+                    0).unsqueeze(0).expand(*second_neighbors.shape, -1)
+                previously_masked_nodes_condition = ~torch.any(
+                    second_neighbors_expanded == previously_masked_nodes_expanded, dim=-1)
+            # Create temp_mask
+            temp_mask = (second_neighbors !=
+                         node_tensor) & previously_masked_nodes_condition
+            # second_neighbors_expanded = second_neighbors.unsqueeze(2).expand(-1, -1, len(previously_masked_nodes))
+            # previously_masked_nodes_expanded = previously_masked_nodes.unsqueeze(0).unsqueeze(0).expand(second_neighbors.shape[0], second_neighbors.shape[1], -1)
+            # temp_mask = (second_neighbors != node.unsqueeze(1)) & (~torch.any(second_neighbors_expanded == previously_masked_nodes_expanded, dim=2))
+            #######################################################
+            # print("temp_mask\n", temp_mask)
+            # print("temp_mask.shape:",temp_mask.shape)
+            # Apply the mask to the combined_neighbors and combined_dists
+            masked_neighbors = second_neighbors[temp_mask]
+            masked_dists = combined_dists[temp_mask]
+            # Get the unique nodes in the masked_neighbors and their indices
+            unique_nodes, indices = torch.unique(
+                masked_neighbors, return_inverse=True)
+            # Compute the minimum distance to each unique node
+            min_dists = torch.zeros(unique_nodes.shape[0])
+            for i, unique_node in enumerate(unique_nodes):
+                min_dists[i] = masked_dists[indices == i].min()
+            # Get the indices that would sort the min_dists
+            sorted_indices = torch.argsort(min_dists)
+            # Get the indices of top k shortest distances
+            # -1 to give the self-connection it's slot
+            temp_k = min(k, sorted_indices.shape[0])-1
+            top_k_indices = sorted_indices[:temp_k]
+            # Select top k neighbors and their distances and store them
+            # print("setting the top k neighbors:")
+            new_adj[node, 1:(temp_k+1)] = unique_nodes[top_k_indices]
+            # print(new_adj[node,:])
+            new_dists[node, 1:(temp_k+1)] = min_dists[top_k_indices]
+            # print(new_dists[node, :])
+            # Update the mask
+            new_mask[node, :(temp_k+1)] = True
+            if new_adj[node, 1:(temp_k+1)] == pruned_adj[node, 1:(temp_k+1)]:
+                # This gaurds against instances where you just have a really small community
+                # where the next nearest neighbors won't be there, so you end up
+                # just reconnecting with the nodes you were already connected with
+                same_as_last = True
+            if temp_k < k-1 and same_as_last == False:
+                # This allows us to do the procedure again to get the next nearest neighbors
+                # until we reach k, if we are within a sufficiently connected area of the
+                # graph
+                pruned_adj[node, 1:(temp_k+1)] = new_adj[node, 1:(temp_k+1)]
+                pruned_dists[node, 1:(
+                    temp_k+1)] = new_dists[node, 1:(temp_k+1)]
+                mask[node, :(temp_k+1)] = new_mask[node, :(temp_k+1)]
+            if debug:
+                if temp_k < k-1:
+                    print("WARNING: found instance of insufficient k")
+                    print("temp_k:", temp_k, "k-1:", k-1)
+                    print("top_k_indices")
+                    print(top_k_indices)
+                    print("unique_node:")
+                    print(unique_node)
+                    print("setting the remainder to be masked")
+                    print(new_mask[node, :])
+                    print(new_adj[node, :])
+                    # print(new_adj[node,:])
+                    print(new_dists[node, :])
+                    # print(new_dists[node, :])
+                    # Update the mask
+                    print("mask:\n", new_mask[node,])
+                else:
+                    print("\n\n full k!")
+                # print(new_mask[node,:])
+                # double check that we only have unique values here
+                temp_nodes, temp_idxs = torch.unique(
+                    new_adj[node, :], return_inverse=True)
+                if temp_nodes.shape[0] < k:
+                    print("top_k_indices")
+                    print(top_k_indices)
+                    print("min_dists")
+                    print(min_dists)
+                    print("unique_node")
+                    print(unique_node)
+                    print("min_dists[top_k_indices]")
+                    print(min_dists[top_k_indices])
+                    assert temp_nodes.shape[0] < k, "we have duplicate nodes when trying to expand the network"
+    print("avg number connections after expansion:",
+          np.mean(np.sum(new_mask.numpy(), axis=1)))
+    if local_iter > 2 and debug:
+        print("iter:", local_iter)
+        # print(poop)
+    return new_adj, new_dists, new_mask
 
-
+################################
 
 """ 
 pruned_adj = torch.tensor(
