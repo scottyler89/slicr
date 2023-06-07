@@ -200,7 +200,7 @@ def mask_knn_mean_dist(dists, cutoff_threshold=3, min_k=10):
     return(mask)
 
 
-def mask_knn_diff_dist(dists, cutoff_threshold=3, min_k=10):
+def mask_knn_diff_dist(dists, cutoff_threshold=3, local_cutoff_threshold=3, min_k=10):
     """
     Generate a mask for k nearest neighbors based on a cutoff threshold.
     
@@ -281,6 +281,8 @@ def mask_knn_diff_dist(dists, cutoff_threshold=3, min_k=10):
             as_tuple=True)[0].min()
         temp_diff_mask_cutoff[idx, temp_gap_idx:] = False
     diff_mask[:, min_k:] = temp_diff_mask_cutoff
+    diff_mask = mask_knn_local_diff_dist(
+        dists, diff_mask, cutoff_threshold=local_cutoff_threshold, min_k=min_k)
     print("diff_mask")
     print(diff_mask)
     print("mean number connections:")
