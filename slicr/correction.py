@@ -267,7 +267,7 @@ def resort_order(adj, dist, mask, min_k):
             assert out_dist[i, 2]-out_dist[i, 1] > 0, "WTF?"
     # This should be rather rare, but un-mask anything that was previously masked, but we
     # didn't have enough un-masked
-    #out_mask[:,:min_k]=True
+    out_mask[:,:min_k]=True
     assert torch.all(
         out_mask[:, :min_k] == True), "somehow we ended up with masked indices in min_k"
     assert torch.all(
