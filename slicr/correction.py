@@ -238,6 +238,10 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     # set the self connection back to true
     mask[:, 0] = True
     #assert torch.all(corrected_obs_knn_dist>=0), "There's a bug. The corrected distances have negatives"
+    # Sometimes we can get correction down to near exact matches, so we'll add a small amount of noise to break any ties
+    print("adding noise to prevent errors")
+    corrected_obs_knn_dist[:, 1:] += torch.rand(
+        (corrected_obs_knn_dist.shape[0], corrected_obs_knn_dist.shape[1]-1))*0.1
     return corrected_obs_knn_dist
 
 
@@ -270,8 +274,11 @@ def resort_order(adj, dist, mask, min_k):
     out_mask[:,:min_k]=True
     assert torch.all(
         out_mask[:, :min_k] == True), "somehow we ended up with masked indices in min_k"
+    bad_idxs=(out_dist[:, 2]-out_dist[:, 1])<0
+    print(out_dist[bad_idxs,:])
+    print(out_adj[bad_idxs, :])
     assert torch.all(
-        out_dist[:, 2]-out_dist[:, 1]>0), "Sorted in the wrong order. This is a bug."
+        out_dist[:, 2]-out_dist[:, 1]>=0), "Sorted in the wrong order. This is a bug."
     return (out_adj, out_dist, out_mask)
 
 

@@ -219,6 +219,31 @@ def check_adj_conservation(adj_1, mask_1, adj_2, mask_2):
 
 
 
+def slicr_mask(obs_X, 
+                   k, 
+                   cutoff_threshold=0,
+                   local_cutoff_threshold=3,
+                   min_k=10
+                   ):
+    """
+    Takes in your observation matrix, and returns only the pruned kNN graph, without doing covariate correction
+    """
+    obs_X_torch = torch.tensor(obs_X)
+    covar_mat_torch = torch.tensor(covar_mat).float()
+    # Perform nearest neighbors search
+    nbrs = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(obs_X_torch)
+    obs_knn_dist_torch, obs_knn_adj_list = nbrs.kneighbors(obs_X_torch, return_distance=True)
+    obs_knn_dist_torch = torch.tensor(obs_knn_dist_torch)
+    obs_knn_adj_list = torch.tensor(obs_knn_adj_list, dtype=torch.long)
+    knn_mask = torch.tensor(mask_knn(
+                obs_knn_dist_torch, 
+                cutoff_threshold=cutoff_threshold, 
+                skip_mean_mask=False
+                ), dtype=torch.bool
+            )
+    return(obs_knn_adj_list,obs_knn_dist_torch,knn_mask)
+
+
 def slicr_analysis(obs_X, 
                    covar_mat, 
                    k, 
@@ -240,9 +265,9 @@ def slicr_analysis(obs_X,
                      0), "There's a bug. The first round distances have negatives"
     # log the mean absolute betas to quantify magnitude of 
     # covariate effects
-    beta_list = [betas.clone()]
+    beta_list = [betas.clone().detach()]
     # Also catelogue the sum of the total effects, so that we can 
-    total_beta = [temp_total_beta]
+    total_beta = [temp_total_beta.clone().detach()]
     print("average total covariate effect:", temp_total_beta)
     #print("mean absolute betas for initialization round",":")
     #print(beta_list[-1])
@@ -303,23 +328,23 @@ def slicr_analysis(obs_X,
             covar_mat, cutoff_threshold, new_knn_mask, min_k, local_cutoff_threshold=local_cutoff_threshold, local_mask_only=True, skip_mask=False, skip_mean_mask=True)  # locally_weighted=False
         if detailed_log:
             results.log_results(
-                new_obs_knn_adj_list.clone(),
-                new_corrected_obs_knn_dist.clone(),
-                new_knn_mask.clone(),
-                betas.clone(),
-                temp_total_beta)
+                new_obs_knn_adj_list.clone().detach(),
+                new_corrected_obs_knn_dist.clone().detach(),
+                new_knn_mask.clone().detach(),
+                betas.clone().detach(),
+                temp_total_beta.clone().detach())
         assert sanity_check_for_adj(
             new_obs_knn_adj_list, new_knn_mask), "failed sanity check at point 4"
         # Also catelogue the sum of the total effects, so that we can
-        total_beta.append(temp_total_beta)
+        total_beta.append(temp_total_beta.clone().detach())
         ## check for convergance
-        percent_removed = 1-(total_beta[-1]/total_beta[0])
+        percent_removed = 1-(total_beta[-1]/max(total_beta))
         print("\n\n", run_name)
         print("iter:",temp_iter)
         print("percent local covariate effect removed:", percent_removed)
-        print(total_beta[-1], "/", total_beta[0],
-                "=", total_beta[-1]/total_beta[0])
-        beta_list.append(betas.clone())
+        print(total_beta[-1], "/", max(total_beta),
+                "=", total_beta[-1]/max(total_beta))
+        beta_list.append(betas.clone().detach())
         print("mean absolute betas for round",temp_iter,":")
         print(beta_list[-1])
         ## check for early stopping
@@ -338,7 +363,10 @@ def slicr_analysis(obs_X,
         obs_knn_adj_list=new_obs_knn_adj_list
         corrected_obs_knn_dist=new_corrected_obs_knn_dist
         knn_mask = new_knn_mask
-    return (obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, beta_list, total_beta)
+    if detailed_log:
+        return (obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, beta_list, total_beta, results)
+    else:
+        return (obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, beta_list, total_beta)
 
 
 """ 
