@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='slicr',
-    version='0.1.4',
+    version='0.1.5',
     description='SLICR: Sparse Locally Involved Covariate Regression. A Python package for efficient, memory-conscious kNN distance correction, based on technical covariates whose effect should be removed.',
     author='Scott Tyler',
     author_email='scottyler89@gmail.com',
