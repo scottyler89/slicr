@@ -4,8 +4,7 @@ import numpy as np
 from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 from .utils import convert_to_torch_sparse
-from .correction import compute_covariate_difference, compute_distance_correction_simplified, correct_observed_distances, compute_distance_correction_simplified_with_beta_inclusion, correct_observed_distances_mask, resort_order, remeasure_distances
-# , expand_knn_list, prune_knn_list, iterative_update, prune_only, inv_min_max_norm, G_from_adj_and_dist
+from .correction import compute_covariate_difference, compute_distance_correction_simplified, correct_observed_distances, compute_distance_correction_simplified_with_beta_inclusion, correct_observed_distances_mask, resort_order, remeasure_distances, global_correction
 from .graph import mask_knn, get_re_expanded_adj_and_dist, prune_only_mask, prune_only_mask_percent, mask_knn_local_diff_dist
 from .results import AnalysisResults
 
@@ -229,7 +228,6 @@ def slicr_mask(obs_X,
     Takes in your observation matrix, and returns only the pruned kNN graph, without doing covariate correction
     """
     obs_X_torch = torch.tensor(obs_X)
-    covar_mat_torch = torch.tensor(covar_mat).float()
     # Perform nearest neighbors search
     nbrs = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(obs_X_torch)
     obs_knn_dist_torch, obs_knn_adj_list = nbrs.kneighbors(obs_X_torch, return_distance=True)
@@ -238,10 +236,20 @@ def slicr_mask(obs_X,
     knn_mask = torch.tensor(mask_knn(
                 obs_knn_dist_torch, 
                 cutoff_threshold=cutoff_threshold, 
-                skip_mean_mask=False
+                skip_mean_mask=False,
+                local_cutoff_threshold=3,
+                min_k=min_k
                 ), dtype=torch.bool
             )
+    knn_mask = mask_knn_local_diff_dist(dists, knn_mask, cutoff_threshold=local_cutoff_threshold, min_k=10)
     return(obs_knn_adj_list,obs_knn_dist_torch,knn_mask)
+
+
+def integer_interpolation(k, final_k, n_steps):
+    k_vect = np.linspace(k, final_k, n_steps)
+    k_vect = np.round(k_vect).astype(int)
+    return k_vect.tolist()
+
 
 
 def slicr_analysis(obs_X, 
@@ -252,11 +260,20 @@ def slicr_analysis(obs_X,
                    min_k=10,
                    relative_beta_removal=0.15,
                    shrink_percentage=0.75,
-                   max_iters=100,
+                   max_iters=40,
                    detailed_log=False,
+                   global_initial_correction_mat = None,
+                   final_k = None,## TODO: implement variable increasing k over iters
                    run_name=""):
     assert k>min_k, "the min_k variable must be higher than k"
+    if type(final_k) == type(None):
+        ## If we're not doing the expanding neighbor graph, keep k constant
+        final_k=k
+    k_vect = integer_interpolation(k, final_k,max_iters)
     results = AnalysisResults()
+    if type(global_initial_correction_mat)!=type(None):
+        global_initial_correction_mat=torch.tensor(global_initial_correction_mat)
+        obs_X = global_correction(obs_X, global_initial_correction_mat)
     ## initialize the correction
     covar_mat = torch.tensor(covar_mat)
     obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, betas, temp_total_beta = perform_analysis_with_mask(
@@ -278,6 +295,7 @@ def slicr_analysis(obs_X,
     early_stop = False
     while ((temp_iter<max_iters) and (converged==False) or early_stop):
         temp_iter+=1
+        k=k_vect[temp_iter]
         # prune
         #print(obs_knn_adj_list.shape)
         #print(corrected_obs_knn_dist.shape)
@@ -369,27 +387,3 @@ def slicr_analysis(obs_X,
         return (obs_knn_adj_list, corrected_obs_knn_dist, knn_mask, beta_list, total_beta)
 
 
-""" 
-a,d,m,beta_list, total_beta = slicr_analysis(real_X, covar_mat_st.to_numpy(),20,1)
-
-pa, pd, pm = prune_only_mask(
-            a.numpy().astype(int), 
-            d.numpy(), 
-            m.numpy(),
-            10)
-G2 = G_from_adj_and_dist_mask(pa, pd, pm)
-pos2 = nx.spring_layout(
-    G2,
-    pos=pos_orig,#result_dict['k_100_thresh_2.5_frac_1']['end_positions'],
-    weight="none",
-    seed=123456)
-
-pos_orig_array = convert_pos_dict_to_array(pos_orig)
-pos_array = convert_pos_dict_to_array(pos2)
-plt.scatter(pos_orig_array[:, 0], pos_orig_array[:, 1], c=cm.get_cmap('inferno')(covar_mat_st.to_numpy()[:, -1]))
-plt.show()
-
-plt.scatter(pos_array[:,0],pos_array[:,1],c= cm.get_cmap('inferno')(covar_mat_st.to_numpy()[:,-1]))
-plt.show()
-
-"""

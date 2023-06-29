@@ -295,3 +295,28 @@ def remeasure_distances(adj, obs_X):
     print(distances)
     return(torch.tensor(distances))
 
+
+def global_correction(obs_X, global_initial_correction_mat):
+    """
+    Perform a linear rotation and correction on a tensor.
+
+    Parameters:
+    obs_X (torch.Tensor): The dependent variable tensor with shape (n_obs, n_feat).
+    global_initial_correction_mat (torch.Tensor): The independent variable tensor with shape (n_obs, n_covariate).
+
+    Returns:
+    torch.Tensor: The tensor of residuals after linear rotation and correction.
+    """
+    # Add a column of ones to represent intercept terms
+    X = torch.cat([global_initial_correction_mat, torch.ones(
+        global_initial_correction_mat.shape[0], 1)], dim=1)
+    # Perform linear regression to calculate betas
+    solution = torch.linalg.lstsq(obs_X.t(), X.t())
+    betas = solution.solution
+    # Calculate predicted values
+    preds = X @ betas[:X.shape[1]]
+    # Subtract predicted values from original data to obtain residuals
+    residuals = obs_X - preds
+    return residuals
+
+
