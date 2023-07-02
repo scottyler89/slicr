@@ -39,3 +39,7 @@ results = slicr_analysis(obs_X,
 # But let's be real - this isn't trivial, so what about a non-trivial example:
 # TODO
 
+
+
+# Licensing
+This software is available under dual-licencing. For non-commercial entities, this software can be used under the associated licence under the 'NON-COMMERCIAL-LICENSE' file. Commercial entities must enquire.
