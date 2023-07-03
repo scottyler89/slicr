@@ -54,22 +54,30 @@ def do_mask_and_regression(obs_knn_adj_list,
     assert sanity_check_for_adj(
         obs_knn_adj_list, original_mask), "failed sanity check at point 3c"
     if local_mask_only:
-        knn_mask = torch.tensor(
-            mask_knn_local_diff_dist(
-                obs_knn_dist_torch, original_mask, cutoff_threshold=local_cutoff_threshold, min_k=min_k),
-            dtype=torch.bool
-        )
+        #knn_mask = torch.tensor(
+        #    mask_knn_local_diff_dist(
+        #        obs_knn_dist_torch, original_mask, cutoff_threshold=local_cutoff_threshold, min_k=min_k),
+        #    dtype=torch.bool
+        #)
+        knn_mask = mask_knn_local_diff_dist(
+                obs_knn_dist_torch, original_mask, cutoff_threshold=local_cutoff_threshold, min_k=min_k)
     else:
         if skip_mask:
             knn_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
         else:
-            knn_mask = torch.tensor(mask_knn(
+            #knn_mask = torch.tensor(mask_knn(
+            #    obs_knn_dist_torch, 
+            #    cutoff_threshold=cutoff_threshold, 
+            #    skip_mean_mask=skip_mean_mask
+            #    ), dtype=torch.bool
+            #)
+            knn_mask = mask_knn(
                 obs_knn_dist_torch, 
                 cutoff_threshold=cutoff_threshold, 
                 skip_mean_mask=skip_mean_mask
-                ), dtype=torch.bool
-            )
-            knn_mask = knn_mask * torch.tensor(original_mask, dtype=torch.bool)
+                )
+            #knn_mask = knn_mask * torch.tensor(original_mask, dtype=torch.bool)
+            knn_mask = knn_mask * original_mask
     assert sanity_check_for_adj(
         obs_knn_adj_list, original_mask), "failed sanity check at point 3d_old"
     #print("original_mask[129, :]", original_mask[129, :])
@@ -77,8 +85,8 @@ def do_mask_and_regression(obs_knn_adj_list,
     #print("knn_mask[129,:]",knn_mask[129,:])
     assert sanity_check_for_adj(
         obs_knn_adj_list, knn_mask), "failed sanity check at point 3d_new"
-    print("updated mask:")
-    print(knn_mask)
+    #print("updated mask:")
+    #print(knn_mask)
     # Compute the covariate difference
     covar_diff = compute_covariate_difference(
         obs_knn_adj_list, covar_mat_torch)
@@ -161,19 +169,19 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, min_k, res
     assert obs_X.shape[0] == covar_mat.shape[0], "Inconsistent input shapes"
     # Convert to PyTorch tensors
     #obs_X_torch = convert_to_torch_sparse(obs_X)
-    obs_X_torch = torch.tensor(obs_X)
-    covar_mat_torch = torch.tensor(covar_mat).float()
     # Perform nearest neighbors search
-    nbrs = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(obs_X_torch)
-    obs_knn_dist_torch, obs_knn_adj_list = nbrs.kneighbors(obs_X_torch, return_distance=True)
+    print("getting initial neighbors")
+    nbrs = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(obs_X)
+    obs_knn_dist_torch, obs_knn_adj_list = nbrs.kneighbors(obs_X, return_distance=True)
     obs_knn_dist_torch = torch.tensor(obs_knn_dist_torch)
     obs_knn_adj_list = torch.tensor(obs_knn_adj_list, dtype=torch.long)
     original_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
     if detailed_log:
         results.log_results(obs_knn_adj_list.clone(), obs_knn_dist_torch.clone(), original_mask.clone(), None, None)
+    print("performing initial round of local covariate adjustment")
     corrected_adj, corrected_obs_knn_dist, knn_mask, betas, total_beta = do_mask_and_regression(
         obs_knn_adj_list, obs_knn_dist_torch,
-        covar_mat_torch, cutoff_threshold, original_mask, min_k)
+        covar_mat, cutoff_threshold, original_mask, min_k)
     if detailed_log:
         results.log_results(
             corrected_adj.clone(), 
@@ -186,7 +194,7 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, min_k, res
 
 
 def sanity_check_for_adj(temp_adj, temp_mask):
-    print("sanity check:")
+    #print("sanity check:")
     for i in range(temp_adj.shape[0]):
         temp_unq = torch.unique(temp_adj[i,temp_mask[i]])
         #print("temp_unq")
@@ -194,18 +202,19 @@ def sanity_check_for_adj(temp_adj, temp_mask):
         #print("temp_adj.shape[1]", temp_adj.shape[1])
         #print("temp_mask[i].sum()",temp_mask[i].sum())
         if temp_unq.shape[0] < temp_adj.shape[1] and i % int(temp_adj.shape[0]/2) == 0:
-            print("temp_adj[i,:]")
-            print(temp_adj[i, :])
-            print("temp_mask[i]")
-            print(temp_mask[i])
+            pass
+            #print("temp_adj[i,:]")
+            #print(temp_adj[i, :])
+            #print("temp_mask[i]")
+            #print(temp_mask[i])
         if temp_unq.shape[0]<temp_mask[i].sum():
-            print("temp_adj[i,:]")
-            print(temp_adj[i, :])
-            print("temp_mask[i]")
-            print(temp_mask[i])
-            print("temp_adj[i,temp_mask[i]]")
-            print(temp_adj[i,temp_mask[i]])
-            print("temp_unq:",temp_unq)
+            #print("temp_adj[i,:]")
+            #print(temp_adj[i, :])
+            #print("temp_mask[i]")
+            #print(temp_mask[i])
+            #print("temp_adj[i,temp_mask[i]]")
+            #print(temp_adj[i,temp_mask[i]])
+            #print("temp_unq:",temp_unq)
             return(False)
     return(True)
 
@@ -241,7 +250,7 @@ def slicr_mask(obs_X,
                 min_k=min_k
                 ), dtype=torch.bool
             )
-    knn_mask = mask_knn_local_diff_dist(dists, knn_mask, cutoff_threshold=local_cutoff_threshold, min_k=10)
+    knn_mask = mask_knn_local_diff_dist(obs_knn_dist_torch, knn_mask, cutoff_threshold=local_cutoff_threshold, min_k=10)
     return(obs_knn_adj_list,obs_knn_dist_torch,knn_mask)
 
 
@@ -270,6 +279,7 @@ def slicr_analysis(obs_X,
         ## If we're not doing the expanding neighbor graph, keep k constant
         final_k=k
     k_vect = integer_interpolation(k, final_k,max_iters)
+    obs_X = torch.tensor(obs_X)
     results = AnalysisResults()
     if type(global_initial_correction_mat)!=type(None):
         global_initial_correction_mat=torch.tensor(global_initial_correction_mat)
@@ -295,6 +305,7 @@ def slicr_analysis(obs_X,
     early_stop = False
     while ((temp_iter<max_iters) and (converged==False) or early_stop):
         temp_iter+=1
+        print("\nstarting new iteration:",temp_iter)
         k=k_vect[temp_iter]
         # prune
         #print(obs_knn_adj_list.shape)
@@ -368,9 +379,13 @@ def slicr_analysis(obs_X,
         ## check for early stopping
         early_stop = False
         if len(total_beta)>2:
-            ## Changed my mind, you can actually have this happen
+            beta_vect = np.array(total_beta)
             ## when you are still accurately correcting
-            if False:#total_beta[-1]>total_beta[-2]:
+            # Last two didn't improve
+            last_beta_delta = beta_vect[-1]-np.min(beta_vect)
+            second_to_last_beta_delta = beta_vect[-2]-np.min(beta_vect)
+            print("beta delta",last_beta_delta, second_to_last_beta_delta)
+            if (last_beta_delta > 0) and (second_to_last_beta_delta > 0):
                 ## if it started to get worse again
                 early_stop = True
                 ## this means that we'll return the prior round's results

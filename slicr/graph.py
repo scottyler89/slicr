@@ -283,8 +283,8 @@ def mask_knn_diff_dist(dists, cutoff_threshold=3, local_cutoff_threshold=3, min_
     diff_mask[:, min_k:] = temp_diff_mask_cutoff
     diff_mask = mask_knn_local_diff_dist(
         dists, diff_mask, cutoff_threshold=local_cutoff_threshold, min_k=min_k)
-    print("diff_mask")
-    print(diff_mask)
+    #print("diff_mask")
+    #print(diff_mask)
     print("mean number connections:")
     print(torch.mean(torch.sum(diff_mask.float(), dim=1)))
     return (diff_mask)
@@ -393,8 +393,8 @@ def mask_knn_local_diff_dist(dists, prior_mask, cutoff_threshold=3, min_k=10):
     # Apply prior_mask to diff_mask
     diff_mask = diff_mask & prior_mask
     diff_mask[:, (min_k+1):] = temp_diff_mask_cutoff
-    print("diff_mask")
-    print(diff_mask)
+    #print("diff_mask after local diff masking")
+    #print(diff_mask)
     print("mean number connections after local masking:")
     print(torch.mean(torch.sum(diff_mask.float(), dim=1)))
     return diff_mask
@@ -513,8 +513,8 @@ def mask_knn(dists, cutoff_threshold=3, min_k=10, skip_mean_mask = False):
     ##########################
     # Merge the masks
     mask = mask & diff_mask
-    print("final mask:")
-    print(mask)
+    #print("final mask:")
+    #print(mask)
     print("mean number connections:")
     print(torch.mean(torch.sum(mask.float(), dim=1)))
     return(mask)

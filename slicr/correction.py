@@ -291,9 +291,10 @@ def remeasure_distances(adj, obs_X):
     # Square the differences
     sq_diffs = diffs ** 2
     # Sum over the feature dimension and take the square root to get the Euclidean distances
-    distances = np.sqrt(sq_diffs.sum(-1))
+    distances = torch.sqrt(sq_diffs.sum(-1))
     print(distances)
-    return(torch.tensor(distances))
+    #return(torch.tensor(distances))
+    return(distances)
 
 
 def global_correction(obs_X, global_initial_correction_mat):
