@@ -173,7 +173,7 @@ def perform_analysis_with_mask(obs_X, covar_mat, k, cutoff_threshold, min_k, res
     print("getting initial neighbors")
     nbrs = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(obs_X)
     obs_knn_dist_torch, obs_knn_adj_list = nbrs.kneighbors(obs_X, return_distance=True)
-    obs_knn_dist_torch = torch.tensor(obs_knn_dist_torch)
+    obs_knn_dist_torch = torch.log1p(torch.tensor(obs_knn_dist_torch))*10
     obs_knn_adj_list = torch.tensor(obs_knn_adj_list, dtype=torch.long)
     original_mask = torch.ones_like(obs_knn_adj_list, dtype=torch.bool)
     if detailed_log:

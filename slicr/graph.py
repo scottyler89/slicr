@@ -582,6 +582,8 @@ def get_re_expanded_adj_and_dist(pruned_adj, pruned_dists, mask, k, epsilon = 1e
     new_dists = torch.zeros((n_nodes, k))
     new_mask = torch.zeros((n_nodes, k), dtype=torch.bool)
     new_mask[:, 0] = True
+    ## TODO: be defensive against mins less than 0 & self-connection zeros
+    node_dist_mins = pruned_dists.min(0)
     # Process each node
     for node in range(n_nodes):
         # Get the first neighbors and their distances

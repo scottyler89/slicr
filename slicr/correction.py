@@ -241,7 +241,7 @@ def correct_observed_distances_mask(obs_knn_dist, dist_correction, mask):
     # Sometimes we can get correction down to near exact matches, so we'll add a small amount of noise to break any ties
     print("adding noise to prevent errors")
     corrected_obs_knn_dist[:, 1:] += torch.rand(
-        (corrected_obs_knn_dist.shape[0], corrected_obs_knn_dist.shape[1]-1))*0.1
+        (corrected_obs_knn_dist.shape[0], corrected_obs_knn_dist.shape[1]-1))*0.05
     return corrected_obs_knn_dist
 
 
@@ -291,7 +291,7 @@ def remeasure_distances(adj, obs_X):
     # Square the differences
     sq_diffs = diffs ** 2
     # Sum over the feature dimension and take the square root to get the Euclidean distances
-    distances = torch.sqrt(sq_diffs.sum(-1))
+    distances = torch.log1p(torch.sqrt(sq_diffs.sum(-1)))*10
     print(distances)
     #return(torch.tensor(distances))
     return(distances)
@@ -308,10 +308,15 @@ def global_correction(obs_X, global_initial_correction_mat):
     Returns:
     torch.Tensor: The tensor of residuals after linear rotation and correction.
     """
+    assert torch.isnan(obs_X).sum() == 0, "obs_X contains NaN values"
+    assert torch.isnan(global_initial_correction_mat).sum(
+                               ) == 0, "global_initial_correction_mat contains NaN values"
     # Add a column of ones to represent intercept terms
     X = torch.cat([global_initial_correction_mat, torch.ones(
         global_initial_correction_mat.shape[0], 1)], dim=1)
     # Perform linear regression to calculate betas
+    print(obs_X.shape)
+    print(X.shape)
     solution = torch.linalg.lstsq(obs_X.t(), X.t())
     betas = solution.solution
     # Calculate predicted values
@@ -319,5 +324,8 @@ def global_correction(obs_X, global_initial_correction_mat):
     # Subtract predicted values from original data to obtain residuals
     residuals = obs_X - preds
     return residuals
+
+
+#corrected_initial = global_correction(torch.tensor(real_X,dtype=torch.float64),torch.tensor(covar_mat_st[["spliced_length_bias_rank"]].to_numpy()))
 
 
